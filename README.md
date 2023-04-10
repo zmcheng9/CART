@@ -1,2 +1,2 @@
-# CART
-The code of CART for FSMIS
+# CART for few-shot medical image segmentation
+-------
