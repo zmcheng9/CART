@@ -33,7 +33,7 @@ do
   for SUPP_IDX in "${ALL_SUPP[@]}"
   do
     # RELOAD_PATH='please feed the absolute path to the trained weights here' # path to the reloaded model
-    RELOAD_MODEL_PATH="./data/czm/CART_for_FSMIS/exps_on_CHAOST2_4_5s1/CART_train_CHAOST2_cv${EVAL_FOLD}/1/snapshots/1000.pth"
+    RELOAD_MODEL_PATH="./data/czm/CART_for_FSMIS/exps_on_CHAOST2_6_5/CART_train_CHAOST2_cv${EVAL_FOLD}/1/snapshots/1000.pth"
     python3 test.py with \
     mode="test" \
     dataset=$DATASET \
