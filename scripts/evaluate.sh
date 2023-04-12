@@ -1,6 +1,6 @@
 #!/bin/bash
 # test a model to segment abdominal/cardiac MRI
-GPUID1=1
+GPUID1=0
 export CUDA_VISIBLE_DEVICES=$GPUID1
 
 ###### Shared configs ######
