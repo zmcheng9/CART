@@ -37,4 +37,4 @@ Pre-processing is performed according to [Ouyang et al.](https://github.com/chen
 3. Run `./script/train.sh` 
 
 ### Inference
-Run `./script/test.sh` 
+Run `./script/evaluate.sh` 
