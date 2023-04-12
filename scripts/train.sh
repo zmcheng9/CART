@@ -25,7 +25,7 @@ for EVAL_FOLD in "${ALL_EV[@]}"
 do
   PREFIX="train_${DATASET}_cv${EVAL_FOLD}"
   echo $PREFIX
-  LOGDIR="./exps_on_${DATASET}_4_5s1"
+  LOGDIR="./exps_on_${DATASET}_6_5"
 
   if [ ! -d $LOGDIR ]
   then
