@@ -130,7 +130,7 @@ def main(_run, _config, _log):
                     query_image_s = query_image[0][idx_[sub_chunck]:idx_[sub_chunck + 1]]  # C' x 3 x H x W
                     query_pred_s = []
                     for i in range(query_image_s.shape[0]):
-                        _pred_s, _ = model([support_image_s], [support_fg_mask_s], [query_image_s[[i]]],
+                        _pred_s, _, _ = model([support_image_s], [support_fg_mask_s], [query_image_s[[i]]],
                                            train=False)  # 1 x 2 x H x W       3 x 2 x H x W
                         _pred_s = _pred_s.argmax(dim=1, keepdim=True).squeeze(1).cpu()  # 3 x H x W
                         k = len(_pred_s)

@@ -94,7 +94,7 @@ def main(_run, _config, _log):
 
     n_sub_epochs = _config['n_steps'] // _config['max_iters_per_load']  # number of times for reloading
     # log_loss = {'total_loss': 0, 'query_loss': 0, 'align_loss': 0, 'thresh_loss': 0}
-    log_loss = {'total_loss': 0, 'query_loss': 0, 'align_loss': 0, 'thresh_loss': 0, 'mse_loss': 0}
+    log_loss = {'total_loss': 0, 'query_loss': 0, 'align_loss': 0, 'sup_loss': 0}
 
     i_iter = 0
     _log.info(f'Start training...')
@@ -112,19 +112,16 @@ def main(_run, _config, _log):
             query_labels = torch.cat([query_label.long().cuda() for query_label in sample['query_labels']], dim=0)
 
             # Compute outputs and losses.
-            # query_pred, align_loss, mse_loss = model(support_images, support_fg_mask, query_images, train=True)
-            query_pred, align_loss = model(support_images, support_fg_mask, query_images, train=True)
-
+            query_pred, align_loss, sup_loss = model(support_images, support_fg_mask, query_images, train=True)
             # query_loss = criterion(torch.log(torch.clamp(query_pred, torch.finfo(torch.float32).eps,
             #                                              1 - torch.finfo(torch.float32).eps)), query_labels)
-            # print(query_pred[0].size(), query_labels.size(), len(query_pred))
             query_loss = 0.0
-            for i in range(len(query_pred)):
+            for i in range(len(query_pred)):                                               
                 query_loss += criterion_focal(query_pred[i].unsqueeze(0).permute(0, 2, 3, 1), query_labels)
 
-            # print(query_loss)
+  
             query_loss = query_loss / len(query_pred)
-            loss = query_loss + align_loss
+            loss = query_loss + align_loss + sup_loss
 
             # Compute gradient and do SGD step.
             for param in model.parameters():
@@ -136,31 +133,32 @@ def main(_run, _config, _log):
 
             # Log loss
             query_loss = query_loss.detach().data.cpu().numpy()
-            # mse_loss = mse_loss.detach().data.cpu().numpy()
+            sup_loss = sup_loss.detach().data.cpu().numpy()
             align_loss = align_loss.detach().data.cpu().numpy()
 
             _run.log_scalar('total_loss', loss.item())
             _run.log_scalar('query_loss', query_loss)
-            # _run.log_scalar('mse_loss', mse_loss)
+            _run.log_scalar('sup_loss', sup_loss)
             _run.log_scalar('align_loss', align_loss)
 
             log_loss['total_loss'] += loss.item()
             log_loss['query_loss'] += query_loss
             log_loss['align_loss'] += align_loss
-            # log_loss['mse_loss'] += mse_loss
+            log_loss['sup_loss'] += sup_loss
 
             # Print loss and take snapshots.
             if (i_iter + 1) % _config['print_interval'] == 0:
                 total_loss = log_loss['total_loss'] / _config['print_interval']
                 query_loss = log_loss['query_loss'] / _config['print_interval']
                 align_loss = log_loss['align_loss'] / _config['print_interval']
+                sup_loss = log_loss['sup_loss'] / _config['print_interval']
 
                 log_loss['total_loss'] = 0
                 log_loss['query_loss'] = 0
                 log_loss['align_loss'] = 0
-                # log_loss['mse_loss'] = 0
+                log_loss['sup_loss'] = 0
 
-                _log.info(f'step {i_iter + 1}: total_loss: {total_loss}, query_loss: {query_loss}'
+                _log.info(f'step {i_iter + 1}: total_loss: {total_loss}, query_loss: {query_loss}, sup_loss: {sup_loss}'
                           f' align_loss: {align_loss}')
 
             if (i_iter + 1) % _config['save_snapshot_every'] == 0:
