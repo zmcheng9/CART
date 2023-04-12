@@ -9,7 +9,7 @@ import torch.nn.functional as F
 from torch.nn.parameter import Parameter
 from models.encoder import Res101Encoder
 from models.MCAB import MCA
-from torch.nn.functional import normalize
+from focal_loss.focal_loss import FocalLoss
 
 
 class FewShotSeg(nn.Module):
@@ -23,11 +23,12 @@ class FewShotSeg(nn.Module):
         self.device = torch.device('cuda')
         self.scaler = 20.0
         self.criterion = nn.NLLLoss()
-        self.criterion_MSE = nn.MSELoss()
+        self.my_weight = torch.FloatTensor([0.1, 1.0]).cuda()
+        self.criterion_focal = FocalLoss(gamma=0.7, weights=self.my_weight)
         self.alpha = torch.Tensor([1.0, 0.0])
-        self.m = 4
+        self.m = 6
         self.MaskMAB = MCA(self.m, 512, 512, 512*self.m)
-        self.k = 5
+        self.k = 10
 
 
     def forward(self, supp_imgs, supp_mask, qry_imgs, train=False):
@@ -71,40 +72,48 @@ class FewShotSeg(nn.Module):
 
         ###### Compute loss ######
         align_loss = torch.zeros(1).to(self.device)
-        # mse_loss = torch.zeros(1).to(self.device)
+        sup_loss = torch.zeros(1).to(self.device)
         outputs = []
         for epi in range(supp_bs):
             ###### Extract prototypes ######
             # if supp_mask[epi][0].sum() == 0:
-            supp_fts_ = [[[self.getFeatures(supp_fts[n][[epi], way, shot], supp_mask[[epi], way, shot])
-                           for shot in range(self.n_shots)] for way in range(self.n_ways)] for n in
-                         range(len(supp_fts))]   # every fig prototype
-            fg_prototypes = [self.getPrototype(supp_fts_[n]) for n in range(len(supp_fts))]  # the prototypes for support images
+            supp_fts_ = [[self.getFeatures(supp_fts[0][[epi], way, shot], supp_mask[[epi], way, shot])
+                           for shot in range(self.n_shots)] for way in range(self.n_ways)]  # every fig prototype
+            fg_prototypes = self.getPrototype(supp_fts_)  # the prototypes for support images
 
             ###### Get query predictions ######
-            qry_pred = [torch.stack(   # (1, 512, 64, 64) (1, 512)
-                [self.CART(supp_fts[n][[epi], way, 0], qry_fts[n][epi], fg_prototypes[n][way], self.k,
-                           self.thresh_pred[1]) for way in range(self.n_ways)], dim=1) for n in range(len(qry_fts))]
-            qry_pred_up = [F.interpolate(qry_pred[n], size=img_size, mode='bilinear', align_corners=True)
-                           for n in range(len(qry_fts))]
+            qry_preds = []
+            sup_preds = []
+            for way in range(self.n_ways):
+                qry_pred, sup_pred = self.CART(supp_fts[0][[epi], way, 0], qry_fts[0][epi], fg_prototypes[way],
+                                               self.k, self.thresh_pred[1])
+                qry_preds.append(qry_pred)
+                sup_preds.append(sup_pred)
+            qry_preds = torch.stack(qry_preds, dim=1)
+            sup_preds = torch.stack(sup_preds, dim=1)
 
-            preds = [self.alpha[n] * qry_pred_up[n] for n in range(len(qry_fts))]
-            preds = torch.sum(torch.stack(preds, dim=0), dim=0) / torch.sum(self.alpha)
-            preds = torch.cat((1.0 - preds, preds), dim=1)
-            outputs.append(preds)
+            qry_preds = F.interpolate(qry_preds, size=img_size, mode='bilinear', align_corners=True)
+            sup_preds = F.interpolate(sup_preds, size=img_size, mode='bilinear', align_corners=True)
+
+            qry_preds = torch.cat((1.0 - qry_preds, qry_preds), dim=1)
+            outputs.append(qry_preds)
+
+            sup_preds = torch.cat((1.0 - sup_preds, sup_preds), dim=1)
 
             ''' Prototype alignment loss '''
             if train:
-                align_loss_epi = self.alignLoss([supp_fts[n][epi] for n in range(len(supp_fts))],
-                                                [qry_fts[n][epi] for n in range(len(qry_fts))],
-                                                preds, supp_mask[epi])
+                align_loss_epi = self.alignLoss([supp_fts[0][epi]], [qry_fts[0][epi]],
+                                                qry_preds, supp_mask[epi])
                 align_loss += align_loss_epi
 
+                sup_loss_epi = self.sup_loss(sup_preds, supp_mask[epi])
+                sup_loss += sup_loss_epi
 
-        output = torch.stack(outputs, dim=1)  # N x B x (1 + Wa) x H x W
-        output = output.view(-1, *output.shape[2:])
 
-        return output, align_loss / supp_bs
+        outputs = torch.stack(outputs, dim=1)  # N x B x (1 + Wa) x H x W
+        outputs = outputs.view(-1, *outputs.shape[2:])
+
+        return outputs, align_loss / supp_bs, sup_loss / supp_bs
 
 
     def getPred(self, fts, prototype, thresh):
@@ -132,8 +141,7 @@ class FewShotSeg(nn.Module):
             mask: binary mask, expect shape: 1 x H x W
         """
 
-        fts = F.interpolate(fts, size=mask.shape[-2:], mode='bilinear', align_corners=True)   # align_corners=True 元素值不会超出原上下界
-
+        fts = F.interpolate(fts, size=mask.shape[-2:], mode='bilinear', align_corners=True)  
         # masked fg features
         masked_fts = torch.sum(fts * mask[None, ...], dim=(-2, -1)) \
                      / (mask[None, ...].sum(dim=(-2, -1)) + 1e-5)  # 1 x C
@@ -181,7 +189,7 @@ class FewShotSeg(nn.Module):
                 fg_prototypes = [self.getPrototype([qry_fts_[n]]) for n in range(len(supp_fts))]
 
                 # Get predictions
-                supp_pred = [self.CART(qry_fts[n], supp_fts[n][way, [shot]], fg_prototypes[n][way], 1, self.thresh_pred[0])
+                supp_pred = [self.getPred(supp_fts[n][way, [shot]], fg_prototypes[n][way], self.thresh_pred[0])
                              for n in range(len(supp_fts))]  # N x Wa x H' x W'
                 supp_pred = [F.interpolate(supp_pred[n][None, ...], size=fore_mask.shape[-2:], mode='bilinear',
                                            align_corners=True) for n in range(len(supp_fts))]
@@ -215,23 +223,40 @@ class FewShotSeg(nn.Module):
             prototype: prototype of one semantic class
                 expect shape: 1 x C
         """
-
         temp_fts = qry_fts
         prototype_q = prototype
-        pts = []
+        qry_pts = []
+        sup_pts = []
         for i in range(iters):
             prototype_q = self.MaskMAB(prototype_q, temp_fts) + prototype_q
             if i % 2 == 0:
-                pts.append(prototype_q)
+                qry_pts.append(prototype_q)
                 temp_fts = sup_fts
             else:
+                sup_pts.append(prototype_q)
                 temp_fts = qry_fts
 
-        pts = torch.cat(pts, dim=0)   # ([3, 512])
-        pred = -F.cosine_similarity(qry_fts, pts[..., None, None], dim=1) * self.scaler
-        pred = 1.0 - torch.sigmoid(0.5 * (pred - thresh))  # ([1, 64, 64])  [3, 64, 64]
+        qry_pts = torch.cat(qry_pts, dim=0)
+        sup_pts = torch.cat(sup_pts, dim=0)
+        pred = self.getPred(qry_fts, qry_pts, thresh)
+        sup_pred = self.getPred(sup_fts, sup_pts, self.thresh_pred[0])
 
-        return pred
+        return pred, sup_pred
+
+
+    def sup_loss(self, sup_preds, fore_mask): 
+
+        # Construct the support Ground-Truth segmentation
+        supp_label = torch.full_like(fore_mask[0, 0], 255, device=fore_mask.device)
+        supp_label[fore_mask[0, 0] == 1] = 1
+        supp_label[fore_mask[0, 0] == 0] = 0
+
+        loss = torch.zeros(1).to(self.device)
+        for i in range(len(sup_preds)):
+            # Compute sup_loss
+            loss += self.criterion_focal(sup_preds[i].unsqueeze(0).permute(0, 2, 3, 1), supp_label[None, ...].long())
+
+        return loss / len(sup_preds)
 
 
 
