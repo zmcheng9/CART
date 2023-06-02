@@ -1,4 +1,4 @@
-# CART for few-shot medical image segmentation
+# CART for FSMIS
 
 ![image](https://github.com/zmcheng9/CART/blob/main/overview.png)
 
